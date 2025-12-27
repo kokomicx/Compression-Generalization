@@ -1,0 +1,7 @@
+Experiment,Iteration,Gap,TrainLoss,ValLoss,TestAcc,CommBits,ConsensusError
+QSGD-8bit,50,,,,10.0,54496400.0,539710057258.4906
+QSGD-8bit,100,,,,10.0,108992800.0,
+QSGD-8bit,150,,,,10.0,163489200.0,
+QSGD-8bit,200,,,,10.0,217985600.0,
+QSGD-8bit,250,,,,10.0,272482000.0,
+QSGD-8bit,300,,,,10.0,326978400.0,
