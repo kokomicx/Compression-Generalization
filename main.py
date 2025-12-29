@@ -141,6 +141,14 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
     
     global_iter = 0
     for epoch in range(args.epochs):
+        # LR Scheduler
+        if epoch < 100:
+            current_lr = 0.1
+        elif epoch < 150:
+            current_lr = 0.01
+        else:
+            current_lr = 0.001
+            
         # Assume all loaders have same length (partitioned evenly)
         num_batches = len(train_loaders[0])
         
@@ -154,7 +162,7 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
             # 2. Compute Update Step (Consensus -> Diff -> Compress -> Update)
             qs = {}
             for node in nodes:
-                qs[node.node_id] = node.compute_update_step(grads[node.node_id], args.lr)
+                qs[node.node_id] = node.compute_update_step(grads[node.node_id], current_lr)
                 
             # 3. Communicate (Update Neighbor Estimates)
             # In Ring, i sends to i-1 and i+1?

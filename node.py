@@ -13,6 +13,11 @@ class Node:
         # Initialize flat parameters
         self.flat_params = self._flatten_params()
         
+        # Momentum state
+        self.velocities = torch.zeros_like(self.flat_params)
+        self.momentum = 0.9
+        self.weight_decay = 1e-4
+        
         # Neighbor tracking
         self.neighbor_estimates = {} # {neighbor_id: flat_tensor}
         self.neighbors = [] # List of neighbor IDs
@@ -45,6 +50,7 @@ class Node:
         
         # Ensure our params are on device
         self.flat_params = self.flat_params.to(self.device)
+        self.velocities = self.velocities.to(self.device)
         self._load_params(self.flat_params)
 
     def compute_gradient(self):
@@ -93,7 +99,16 @@ class Node:
                     est = self.neighbor_estimates[nid]
                 consensus += w * est
             
-            x_half = consensus - lr * grads
+            # Apply Weight Decay
+            grads = grads.add(self.flat_params, alpha=self.weight_decay)
+            
+            # Update Velocity
+            self.velocities = self.momentum * self.velocities + grads
+            
+            # Compute Update Step using Velocity
+            update_step = lr * self.velocities
+            
+            x_half = consensus - update_step
             
             # 2. Diff
             z = x_half - self.flat_params
