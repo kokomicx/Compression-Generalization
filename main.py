@@ -143,11 +143,11 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
     for epoch in range(args.epochs):
         # LR Scheduler
         if epoch < 100:
-            current_lr = 0.1
+            current_lr = args.lr
         elif epoch < 150:
-            current_lr = 0.01
+            current_lr = args.lr * 0.1
         else:
-            current_lr = 0.001
+            current_lr = args.lr * 0.01
             
         # Assume all loaders have same length (partitioned evenly)
         num_batches = len(train_loaders[0])
@@ -158,6 +158,10 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
             grads = {}
             for node in nodes:
                 grads[node.node_id] = node.compute_gradient()
+
+            # DEBUG: Check gradients for Node 0 at first iteration
+            if global_iter == 0:
+                 print(f"DEBUG: Node 0 Grad Norm: {grads[0].norm().item()}")
                 
             # 2. Compute Update Step (Consensus -> Diff -> Compress -> Update)
             qs = {}
@@ -196,13 +200,13 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
                     'ValLoss': val_loss,
                     'TestAcc': test_acc,
                     'CommBits': cumulative_bits,
-                    'ConsensusError': cons_err
+                    'ConsErr': cons_err
                 }
                 results.append(log_entry)
                 
                 # Live logging
                 if global_iter % 200 == 0:
-                    print(f"Exp: {exp_name} | Iter: {global_iter} | Gap: {gap:.4f} | Acc: {test_acc:.2f}% | ConsErr: {cons_err:.4f}")
+                    print(f"Exp: {exp_name} | Iter: {global_iter} | Loss: {train_loss:.4f} | Gap: {gap:.4f} | Acc: {test_acc:.2f}% | ConsErr: {cons_err:.4f}")
                     
     # Save intermediate results
     df = pd.DataFrame(results)
@@ -211,9 +215,9 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
 
 def main():
     parser = argparse.ArgumentParser(description='DCD-SGD Generalization-Stability Trade-off')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs') # Reduced default for quick testing
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate') # Safer default
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size per node')
+    parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
+    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
+    parser.add_argument('--batch-size', type=int, default=32, help='Batch size per node')
     parser.add_argument('--num_nodes', type=int, default=5, help='Number of nodes')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--run_only', type=str, default=None, help='Run specific experiment (baseline, top10, top1, qsgd)')
@@ -263,7 +267,7 @@ def main():
     
     # Final Plotting
     print("\nPlotting results...")
-    plot_results(os.path.join(exp_dir, 'results.csv'), exp_dir)
+    plot_results(results, exp_dir, "All_Experiments")
     print(f"Done! Results saved to {exp_dir}")
 
 if __name__ == '__main__':
