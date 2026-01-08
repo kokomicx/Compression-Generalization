@@ -43,7 +43,10 @@ class Node:
         self.weights = weights
         
         # Initialize neighbor estimates
-        # We don't store our own estimate in neighbor_estimates, we use self.flat_params
+        # We also need a local estimate for self (x^t_i)
+        # In DCD-SGD, x^t_i is the "public" state that neighbors have
+        self.local_estimate = init_params.clone().to(self.device)
+        
         for nid in neighbors:
             if nid != self.node_id:
                 self.neighbor_estimates[nid] = init_params.clone().to(self.device)
@@ -70,11 +73,21 @@ class Node:
                 p.grad.zero_()
                 
         outputs = self.model(inputs)
-        loss = F.cross_entropy(outputs, targets)
+        
+        # [FIX] Automatically detect task type
+        if outputs.shape[1] == 1:
+            # Binary Classification (Synthetic Logistic Regression)
+            # Ensure target is float and matches output dim (N, 1)
+            criterion = torch.nn.BCEWithLogitsLoss()
+            loss = criterion(outputs, targets.float().view_as(outputs))
+        else:
+            # Multi-class (CIFAR-10)
+            loss = F.cross_entropy(outputs, targets)
+            
         loss.backward()
         
-        # Clip gradients to prevent explosion
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        # Clip gradients to prevent explosion (Relaxed to 10.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
         
         # Flatten gradient
         grads = torch.cat([p.grad.view(-1) if p.grad is not None else torch.zeros_like(p.view(-1)) for p in self.model.parameters()])
@@ -94,7 +107,7 @@ class Node:
             for nid in self.neighbors:
                 w = self.weights[nid]
                 if nid == self.node_id:
-                    est = self.flat_params
+                    est = self.local_estimate
                 else:
                     est = self.neighbor_estimates[nid]
                 consensus += w * est
@@ -118,6 +131,7 @@ class Node:
             
             # 4. Update
             self.flat_params += q
+            self.local_estimate += q
             self._load_params(self.flat_params)
             
             return q

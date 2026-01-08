@@ -122,6 +122,95 @@ class CIFAR10Dataset(Dataset):
             
         return img, target
 
+class SyntheticDataset(Dataset):
+    def __init__(self, size=200, mode='train', seed=42):
+        super(SyntheticDataset, self).__init__()
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        
+        # Classes Y in {0, 1}
+        self.targets = np.random.randint(0, 2, size=size)
+        
+        # Features X in R^2
+        self.data = np.zeros((size, 2))
+        
+        mu0 = np.array([1, -1])
+        mu1 = np.array([-1, 1])
+        
+        for i in range(size):
+            if self.targets[i] == 0:
+                self.data[i] = np.random.normal(mu0, 1.0)
+            else:
+                self.data[i] = np.random.normal(mu1, 1.0)
+        
+        # Label Noise (flip 10%)
+        if mode == 'train':
+            flip_mask = np.random.rand(size) < 0.1
+            self.targets[flip_mask] = 1 - self.targets[flip_mask]
+        
+        # Convert to Tensor
+        self.data = torch.FloatTensor(self.data)
+        self.targets = torch.FloatTensor(self.targets) # Float for BCEWithLogitsLoss
+        
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, index):
+        return self.data[index], self.targets[index]
+
+def get_synthetic_loaders(num_nodes=20, batch_size=10):
+    # Train: 20 nodes * 10 samples = 200 total
+    train_dataset = SyntheticDataset(size=200, mode='train', seed=42)
+    
+    # Test: 10,000 samples
+    test_dataset = SyntheticDataset(size=10000, mode='test', seed=2024)
+    
+    # Partition for Nodes
+    train_loaders = []
+    total_size = len(train_dataset)
+    partition_size = total_size // num_nodes
+    indices = list(range(total_size))
+    
+    for i in range(num_nodes):
+        subset_indices = indices[i * partition_size : (i + 1) * partition_size]
+        subset = Subset(train_dataset, subset_indices)
+        train_loaders.append(DataLoader(subset, batch_size=batch_size, shuffle=True))
+        
+    # Global Train Loader (for evaluation)
+    global_train_loader = DataLoader(train_dataset, batch_size=256, shuffle=False)
+    
+    # Test Loader
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+    
+    return train_loaders, global_train_loader, test_loader
+
+def get_topology_matrix(topo_type, n_nodes):
+    W = torch.zeros((n_nodes, n_nodes))
+    
+    if topo_type == 'complete':
+        W.fill_(1.0 / n_nodes)
+        
+    elif topo_type == 'identity':
+        W = torch.eye(n_nodes)
+        
+    elif topo_type == 'ring':
+        for i in range(n_nodes):
+            W[i, i] = 1.0/3.0
+            W[i, (i-1)%n_nodes] = 1.0/3.0
+            W[i, (i+1)%n_nodes] = 1.0/3.0
+            
+    elif topo_type == 'lazy_complete':
+        # W_ii = 0.95, W_ij = 0.05 / (n-1)
+        off_diag_val = 0.05 / (n_nodes - 1)
+        W.fill_(off_diag_val)
+        for i in range(n_nodes):
+            W[i, i] = 0.95
+            
+    else:
+        raise ValueError(f"Unknown topology: {topo_type}")
+        
+    return W
+
 def get_cifar10_loaders(num_nodes, batch_size, root='./data'):
     """
     Returns:
@@ -167,7 +256,7 @@ def get_cifar10_loaders(num_nodes, batch_size, root='./data'):
     # Partitioning for Nodes
     num_train = len(trainset)
     indices = list(range(num_train))
-    # np.random.shuffle(indices) # Optional: shuffle before partition
+    np.random.shuffle(indices) # Optional: shuffle before partition
     
     split_size = num_train // num_nodes
     train_loaders = []
@@ -183,6 +272,17 @@ def get_cifar10_loaders(num_nodes, batch_size, root='./data'):
             subset, batch_size=batch_size, shuffle=True, num_workers=2)
         train_loaders.append(loader)
 
+    # Sanity Check for Data Loading
+    print("Performing Data Loading Sanity Check...")
+    try:
+        sample_img, _ = next(iter(train_loaders[0]))
+        print(f"Sanity Check - Image Shape: {sample_img.shape}")
+        print(f"Sanity Check - Min Value: {sample_img.min().item():.4f}, Max Value: {sample_img.max().item():.4f}")
+        if sample_img.max() > 50.0: # Should be around 2-3 after normalization
+             print("WARNING: Max value is very high. Normalization might be wrong (e.g. not divided by 255).")
+    except Exception as e:
+        print(f"Sanity Check Failed: {e}")
+
     return train_loaders, test_loader, global_train_loader
 
 def get_ring_topology(num_nodes):
@@ -195,7 +295,11 @@ def get_ring_topology(num_nodes):
     return topology
 
 def plot_results(results, output_dir, exp_name):
-    # (Same as before, relying on pandas and matplotlib)
+    """
+    Plots results following publication standards:
+    - Loss & Accuracy: Aggregated by Epoch (Mean) -> Smoother curves
+    - Gap & Consensus: Raw per Iteration -> Stability analysis
+    """
     if not results:
         return
     import matplotlib.pyplot as plt
@@ -203,38 +307,47 @@ def plot_results(results, output_dir, exp_name):
         
     df = pd.DataFrame(results)
     
-    plt.figure(figsize=(12, 8))
+    # Create Epoch-level aggregation for Loss and Accuracy
+    # Ensure numeric only to avoid errors with non-numeric columns if any
+    numeric_cols = ['TrainLoss', 'ValLoss', 'TestAcc']
+    df_epoch = df.groupby('Epoch')[numeric_cols].mean()
     
+    plt.figure(figsize=(12, 10))
+    
+    # 1. Loss (Aggregated by Epoch)
     plt.subplot(2, 2, 1)
-    plt.plot(df['Iteration'], df['TrainLoss'], label='Train Loss')
-    plt.plot(df['Iteration'], df['ValLoss'], label='Val Loss')
-    plt.xlabel('Iteration')
+    plt.plot(df_epoch.index, df_epoch['TrainLoss'], label='Train Loss')
+    plt.plot(df_epoch.index, df_epoch['ValLoss'], label='Val Loss')
+    plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
+    plt.title('Training and Validation Loss (Per Epoch)')
     plt.legend()
     plt.grid(True)
     
+    # 2. Accuracy (Aggregated by Epoch)
     plt.subplot(2, 2, 2)
-    plt.plot(df['Iteration'], df['Gap'], label='Generalization Gap', color='orange')
+    plt.plot(df_epoch.index, df_epoch['TestAcc'], label='Test Accuracy', color='green')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.title('Test Accuracy (Per Epoch)')
+    plt.legend()
+    plt.grid(True)
+    
+    # 3. Generalization Gap (Raw per Iteration)
+    plt.subplot(2, 2, 3)
+    plt.plot(df['Iteration'], df['Gap'], label='Generalization Gap', color='orange', alpha=0.6)
     plt.xlabel('Iteration')
     plt.ylabel('Gap (Val - Train)')
-    plt.title('Generalization Gap')
+    plt.title('Generalization Gap (Raw)')
     plt.legend()
     plt.grid(True)
     
-    plt.subplot(2, 2, 3)
-    plt.plot(df['Iteration'], df['TestAcc'], label='Test Accuracy', color='green')
-    plt.xlabel('Iteration')
-    plt.ylabel('Accuracy (%)')
-    plt.title('Test Accuracy')
-    plt.legend()
-    plt.grid(True)
-    
+    # 4. Consensus Error (Raw per Iteration)
     plt.subplot(2, 2, 4)
-    plt.plot(df['Iteration'], df['ConsErr'], label='Consensus Error', color='red')
+    plt.plot(df['Iteration'], df['ConsErr'], label='Consensus Error', color='red', alpha=0.6)
     plt.xlabel('Iteration')
     plt.ylabel('Error Norm')
-    plt.title('Consensus Error')
+    plt.title('Consensus Error (Raw)')
     plt.legend()
     plt.grid(True)
     

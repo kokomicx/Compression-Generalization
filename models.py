@@ -62,6 +62,14 @@ class ResNet(nn.Module):
 def ResNet20():
     return ResNet(BasicBlock, [3, 3, 3])
 
+class LogisticRegression(nn.Module):
+    def __init__(self, input_dim=2, output_dim=1):
+        super(LogisticRegression, self).__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+    
+    def forward(self, x):
+        return self.linear(x)
+
 if __name__ == '__main__':
     net = ResNet20()
     y = net(torch.randn(1, 3, 32, 32))

@@ -100,6 +100,25 @@ def calculate_bits(compressor, num_params):
         return num_buckets * 32 + num_params * bits_per_element
     return 32 * num_params
 
+def get_lr(epoch, base_lr):
+    """
+    Learning Rate Schedule:
+    - Warmup (0-5): Linear from 0.01 to base_lr
+    - Main (5-100): base_lr
+    - Decay 1 (100-150): base_lr * 0.1
+    - Decay 2 (150+): base_lr * 0.01
+    """
+    if epoch < 5:
+        # Linear warmup from 0.01 to base_lr
+        start_lr = 0.01
+        return start_lr + (base_lr - start_lr) * epoch / 5
+    elif epoch < 100:
+        return base_lr
+    elif epoch < 150:
+        return base_lr * 0.1
+    else:
+        return base_lr * 0.01
+
 def run_experiment(exp_name, compressor, args, loaders, topology, device, output_dir, existing_results=None):
     print(f"\nRunning Experiment: {exp_name}")
     
@@ -142,12 +161,8 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
     global_iter = 0
     for epoch in range(args.epochs):
         # LR Scheduler
-        if epoch < 100:
-            current_lr = args.lr
-        elif epoch < 150:
-            current_lr = args.lr * 0.1
-        else:
-            current_lr = args.lr * 0.01
+        current_lr = get_lr(epoch, args.lr)
+        print(f"Epoch {epoch} | LR: {current_lr:.6f}")
             
         # Assume all loaders have same length (partitioned evenly)
         num_batches = len(train_loaders[0])
@@ -194,6 +209,7 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
                 
                 log_entry = {
                     'Experiment': exp_name,
+                    'Epoch': epoch,
                     'Iteration': global_iter,
                     'Gap': gap,
                     'TrainLoss': train_loss,
@@ -216,8 +232,8 @@ def run_experiment(exp_name, compressor, args, loaders, topology, device, output
 def main():
     parser = argparse.ArgumentParser(description='DCD-SGD Generalization-Stability Trade-off')
     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('--batch-size', type=int, default=32, help='Batch size per node')
+    parser.add_argument('--lr', type=float, default=0.1, help='Learning rate')
+    parser.add_argument('--batch-size', type=int, default=128, help='Batch size per node')
     parser.add_argument('--num_nodes', type=int, default=5, help='Number of nodes')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--run_only', type=str, default=None, help='Run specific experiment (baseline, top10, top1, qsgd)')

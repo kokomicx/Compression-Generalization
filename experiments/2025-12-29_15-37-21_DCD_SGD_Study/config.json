@@ -1,0 +1,8 @@
+{
+    "epochs": 100,
+    "lr": 0.01,
+    "batch_size": 128,
+    "num_nodes": 5,
+    "seed": 42,
+    "run_only": "baseline"
+}
