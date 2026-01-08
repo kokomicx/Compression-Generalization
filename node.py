@@ -73,7 +73,12 @@ class Node:
                 p.grad.zero_()
                 
         outputs = self.model(inputs)
-        
+
+        # [DEBUG 1] 打印 Node 0 和 Node 1 的输入数据统计
+        if self.node_id in [0, 1]:
+            print(f"[DEBUG Node {self.node_id}] Input Mean: {inputs.mean().item():.4f}, Target Sum: {targets.sum().item()}")
+
+
         # [FIX] Automatically detect task type
         if outputs.shape[1] == 1:
             # Binary Classification (Synthetic Logistic Regression)
@@ -91,16 +96,14 @@ class Node:
         
         # Flatten gradient
         grads = torch.cat([p.grad.view(-1) if p.grad is not None else torch.zeros_like(p.view(-1)) for p in self.model.parameters()])
+        # [DEBUG] 打印梯度范数和损失，检查是否所有节点都一样
+        # [DEBUG 2] 打印梯度范数和前5个元素
+        if self.node_id in [0, 1]:
+            print(f"[DEBUG Node {self.node_id}] Grad Norm: {grads.norm().item():.4f}, First 5 Grads: {grads[:5].tolist()}")
+        
         return grads
 
     def compute_update_step(self, grads, lr):
-        """
-        Performs the DCD-SGD update step:
-        1. Consensus: x_half = sum(W_ij * x_j_hat) - lr * g
-        2. Diff: z = x_half - x_t
-        3. Compress: q = C(z)
-        4. Update: x_{t+1} = x_t + q
-        """
         with torch.no_grad():
             # 1. Consensus
             consensus = torch.zeros_like(self.flat_params)
@@ -112,15 +115,21 @@ class Node:
                     est = self.neighbor_estimates[nid]
                 consensus += w * est
             
-            # Apply Weight Decay
-            grads = grads.add(self.flat_params, alpha=self.weight_decay)
+            # [FIX] 移除 weight_decay 的 add 操作，直接使用 grads
+            # 如果需要 weight decay，显式写出：
+            if self.weight_decay > 0:
+                grads = grads + self.flat_params * self.weight_decay
             
-            # Update Velocity
+            # [FIX] 简化 Velocity 更新，确保不使用原地操作
             self.velocities = self.momentum * self.velocities + grads
             
-            # Compute Update Step using Velocity
+            # Compute Update Step
             update_step = lr * self.velocities
             
+            # [DEBUG] 打印关键向量的范数，确认它们不是 0
+            if self.node_id == 0:
+                print(f"[Node 0 Update] ConsNorm: {consensus.norm():.4f}, UpdStepNorm: {update_step.norm():.4f}")
+
             x_half = consensus - update_step
             
             # 2. Diff
@@ -130,8 +139,10 @@ class Node:
             q = self.compressor.compress(z)
             
             # 4. Update
-            self.flat_params += q
-            self.local_estimate += q
+            self.flat_params.add_(q) # 使用 add_ 原地更新
+            self.local_estimate.add_(q) # 使用 add_ 原地更新
+            
+            # 同步回模型
             self._load_params(self.flat_params)
             
             return q
